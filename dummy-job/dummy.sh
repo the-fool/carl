@@ -3,5 +3,5 @@
 for i in {1..100}
 do
     echo LOG $i
-    sleep 1
+    sleep 0.05
 done

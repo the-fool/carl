@@ -1,9 +1,13 @@
 import hashlib
 import string
+import datetime
 import random
 import logging
 import yaml
-import sys,os, time
+import sys
+import os
+import time
+import argparse
 from kubernetes import client, config, utils
 import kubernetes.client
 from kubernetes.client.rest import ApiException
@@ -61,17 +65,33 @@ def kube_create_job_object(name, container_image, namespace="default", container
     body.spec = client.V1JobSpec(ttl_seconds_after_finished=600, template=template.template)
     return body
 
-def kube_create_job():
+def kube_create_job(image: str, name: str, namespace='default', env_vars={}):
     # Create the job definition
-    container_image = "namespace/k8-test-app:83226641581a1f0971055f972465cb903755fc9a"
-    name = id_generator()
-    body = kube_create_job_object(name, container_image, env_vars={"VAR": "TESTING"})
+    container_image = image
+    name = id_generator(name)
+    body = kube_create_job_object(name, container_image, env_vars=env_vars)
     try: 
-        api_response = api_instance.create_namespaced_job("default", body, pretty=True)
-        print(api_response)
+        api_instance.create_namespaced_job(namespace, body, pretty=True)
+        return name
     except ApiException as e:
         print("Exception when calling BatchV1Api->create_namespaced_job: %s\n" % e)
-    return
+        sys.exit(1)
 
-def id_generator(size=12, chars=string.ascii_lowercase + string.digits):
-    return ''.join(random.choice(chars) for _ in range(size))
+def id_generator(name: str):
+
+    ts = datetime.datetime.utcnow().isoformat().replace(':', '-').replace('.', '-')
+    job_id = f'{name}-{ts}-job'.lower()
+    os.environ['JOB_ID'] = job_id
+    return job_id
+
+
+def main(image: str, name: str) -> str:
+    return kube_create_job(image, name)
+
+if __name__=='__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("image", type=str)
+    parser.add_argument("name", type=str)
+    args = parser.parse_args()
+    job_id = main(image=args.image, name=args.name)
+    print(job_id)
