@@ -17,8 +17,9 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
 # Setup K8 configs
 config.load_kube_config()
-configuration = kubernetes.client.Configuration()
-api_instance = kubernetes.client.BatchV1Api(kubernetes.client.ApiClient(configuration))
+configuration = client.Configuration()
+api_instance = client.BatchV1Api(client.ApiClient(configuration))
+core_api = client.CoreV1Api(client.ApiClient(configuration))
 
 def kube_create_job_object(name, container_image, namespace="default", container_name="jobcontainer", env_vars={}):
     """
@@ -78,15 +79,46 @@ def kube_create_job(image: str, name: str, namespace='default', env_vars={}):
         sys.exit(1)
 
 def id_generator(name: str):
-
     ts = datetime.datetime.utcnow().isoformat().replace(':', '-').replace('.', '-')
     job_id = f'{name}-{ts}-job'.lower()
     os.environ['JOB_ID'] = job_id
     return job_id
 
+def get_pod_name(job_name: str, namespace: str) -> str:
+    for _ in range(5):
+        try:
+            pods = core_api.list_namespaced_pod(namespace=namespace, label_selector=f'job-name={job_name}').items
+        except Exception as e:
+            print(e)
+            time.sleep(2)
+
+    
+    if len(pods) != 1:
+        print("Odd number of pods: ", pods)
+        sys.exit(1)
+    
+    pod = pods[0]
+    return pod.metadata.name
+
+def consume_logs(pod_name: str, namespace: str):
+    for _ in range(10):
+        if core_api.read_namespaced_pod_status(pod_name, namespace).status.container_statuses[0].ready:
+            try:
+                logs = core_api.read_namespaced_pod_log(pod_name, namespace)
+                print(logs)
+                break
+            except Exception as e:
+                print(e)
+                raise Exception
+        else:
+            time.sleep(2)
+
+
 
 def main(image: str, name: str) -> str:
-    return kube_create_job(image, name)
+    job_name = kube_create_job(image, name)
+
+    return job_name
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
@@ -94,4 +126,7 @@ if __name__=='__main__':
     parser.add_argument("name", type=str)
     args = parser.parse_args()
     job_id = main(image=args.image, name=args.name)
+    pod_name = get_pod_name(job_id, 'default')
     print(job_id)
+    print(pod_name)
+    consume_logs(pod_name, 'default')
