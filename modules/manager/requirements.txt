@@ -1,3 +1,5 @@
 kubernetes
 flask
 gunicorn
+flask_expects_json
+google-cloud-firestore
