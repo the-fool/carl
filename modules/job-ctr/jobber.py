@@ -154,7 +154,7 @@ def get_pod_name(core_api, job_name: str, namespace: str) -> str:
     raise TimeoutError('Unable to find pod for job in 20 seconds')
 
 
-async def main(image: str, name: str, namespace='default') -> str:
+async def main(image: str, name: str, namespace: str) -> str:
     api_instances = setup_kube()
     batch_api = api_instances['batch_api']
     core_api = api_instances['core_api']
@@ -167,5 +167,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("image", type=str)
     parser.add_argument("name", type=str)
+    parser.add_argument('namespace', type=str, default='default')
     args = parser.parse_args()
-    asyncio.run(main(image=args.image, name=args.name))
+    asyncio.run(main(image=args.image, name=args.name, namespace=args.namespace))

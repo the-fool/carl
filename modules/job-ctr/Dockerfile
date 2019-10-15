@@ -12,4 +12,4 @@ ADD . .
 
 ENTRYPOINT ["/app/entrypoint.sh"]
 
-CMD [ "gunicorn", "-w", "4", "-b", "0.0.0.0:80", "wsgi:app" ]
+CMD [ "/app/cmd.sh" ]

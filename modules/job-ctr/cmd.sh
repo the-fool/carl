@@ -1,13 +1,3 @@
 #!/bin/bash
 
-JOB_ID=$(python ./job.py "$IMAGE" "$NAME")
-RET=1
-until [ ${RET} -eq 0 ]; do
-    kubectl get pods --selector=job-name="$JOB_ID" --output=jsonpath='{.items[*].metadata.name}' > /dev/null 2>&1
-    RET=$?
-    sleep 2    
-done
-
-
-POD=$(kubectl get pods --selector=job-name="$JOB_ID" --output=jsonpath='{.items[*].metadata.name}')
-kubectl logs --follow $POD | python3 looper.py
+python ./job.py "$IMAGE" "$NAME" "$NAMESPACE"
