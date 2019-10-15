@@ -15,12 +15,16 @@ if os.name == 'nt':
 # Set logging
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
-# Setup K8 configs
-config.load_kube_config()
-configuration = client.Configuration()
-api_instance = client.BatchV1Api(client.ApiClient(configuration))
-core_api = client.CoreV1Api(client.ApiClient(configuration))
-
+def setup_kube():
+    # Setup K8 configs
+    config.load_kube_config()
+    configuration = client.Configuration()
+    batch_api = client.BatchV1Api(client.ApiClient(configuration))
+    core_api = client.CoreV1Api(client.ApiClient(configuration))
+    return {
+        'batch_api': batch_api,
+        'core_api': core_api
+    }
 
 async def run_shell(cmd: str):
     proc = await asyncio.create_subprocess_shell(
@@ -28,20 +32,22 @@ async def run_shell(cmd: str):
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE)
 
-    while not proc.stdout.at_eof():
+    while True:
         data = await proc.stdout.readline()
         if data:
             yield data.decode('ascii').rstrip()
+        elif proc.stdout.at_eof():
+            break
 
 
-async def consume_logs(pod_name: str, namespace: str) -> None:
+async def consume_logs(core_api, pod_name: str, namespace: str) -> None:
     for _ in range(10):
         ready = (core_api.read_namespaced_pod_status(name=pod_name, namespace=namespace)
                  .status
                  .container_statuses[0]
                  .ready)
         if ready:
-            cmd = f'kubectl logs --follow ${pod_name} --namespace={namespace}'
+            cmd = f'kubectl logs --follow {pod_name} --namespace={namespace}'
             try:
                 async for log_line in run_shell(cmd):
                     print('Got ', log_line)
@@ -121,7 +127,7 @@ def id_generator(name: str):
     return job_id
 
 
-def create_job(image: str, name: str, namespace='default', env_vars={}):
+def create_job(api_instance, image: str, name: str, namespace='default', env_vars={}):
     # Create the job definition
     container_image = image
     name = id_generator(name)
@@ -134,7 +140,7 @@ def create_job(image: str, name: str, namespace='default', env_vars={}):
         sys.exit(1)
 
 
-def get_pod_name(job_name: str, namespace: str) -> str:
+def get_pod_name(core_api, job_name: str, namespace: str) -> str:
     for _ in range(10):
         try:
             pods = core_api.list_namespaced_pod(
@@ -149,9 +155,12 @@ def get_pod_name(job_name: str, namespace: str) -> str:
 
 
 async def main(image: str, name: str, namespace='default') -> str:
-    job_id = create_job(image, name)
-    pod_name = get_pod_name(job_id, namespace)
-    await consume_logs(pod_name, 'default')
+    api_instances = setup_kube()
+    batch_api = api_instances['batch_api']
+    core_api = api_instances['core_api']
+    job_id = create_job(batch_api, image, name)
+    pod_name = get_pod_name(core_api, job_id, namespace)
+    await consume_logs(core_api, pod_name, 'default')
 
 
 if __name__ == '__main__':
