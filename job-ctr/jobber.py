@@ -3,8 +3,14 @@ import datetime
 import logging
 import sys
 import time
+import os
 import argparse
 from kubernetes import client, config, utils
+from typing import List
+
+# set loop (handle Windows)
+if os.name == 'nt':
+    asyncio.set_event_loop(asyncio.ProactorEventLoop())
 
 # Set logging
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
@@ -15,12 +21,13 @@ configuration = client.Configuration()
 api_instance = client.BatchV1Api(client.ApiClient(configuration))
 core_api = client.CoreV1Api(client.ApiClient(configuration))
 
+
 async def run_shell(cmd: str):
     proc = await asyncio.create_subprocess_shell(
         cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE)
-    
+
     while not proc.stdout.at_eof():
         data = await proc.stdout.readline()
         if data:
@@ -29,7 +36,10 @@ async def run_shell(cmd: str):
 
 async def consume_logs(pod_name: str, namespace: str) -> None:
     for _ in range(10):
-        ready = core_api.read_namespaced_pod_status(name=pod_name, namespace=namespace).status.container_status[0].ready
+        ready = (core_api.read_namespaced_pod_status(name=pod_name, namespace=namespace)
+                 .status
+                 .container_statuses[0]
+                 .ready)
         if ready:
             cmd = f'kubectl logs --follow ${pod_name} --namespace={namespace}'
             try:
@@ -43,7 +53,8 @@ async def consume_logs(pod_name: str, namespace: str) -> None:
             await asyncio.sleep(2)
     raise TimeoutError('Pod not ready after 20 seconds')
 
-def kube_create_job_object(name, container_image, namespace="default", container_name="jobcontainer", env_vars={}):
+
+def kube_create_job_object(name, container_image, namespace="default", container_name="jobcontainer", env_vars={}, command: str = None, args: List[str] = None):
     """
     Create a k8 Job Object
     Minimum definition of a job object:
@@ -59,7 +70,7 @@ def kube_create_job_object(name, container_image, namespace="default", container
     V1Job -> V1ObjectMeta
           -> V1JobStatus
           -> V1JobSpec -> V1PodTemplate -> V1PodTemplateSpec -> V1Container
-    
+
     Now the tricky part, is that V1Job.spec needs a .template, but not a PodTemplateSpec, as such
     you need to build a PodTemplate, add a template field (template.template) and make sure
     template.template.spec is now the PodSpec.
@@ -77,61 +88,73 @@ def kube_create_job_object(name, container_image, namespace="default", container
 
     # And a Status
     body.status = client.V1JobStatus()
-    
+
     # Now we start with the Template...
     template = client.V1PodTemplate()
     template.template = client.V1PodTemplateSpec()
-    
+
     # Passing Arguments in Env:
     env_list = []
     for env_name, env_value in env_vars.items():
-        env_list.append( client.V1EnvVar(name=env_name, value=env_value) )
-    container = client.V1Container(name=container_name, image=container_image, env=env_list)
-    template.template.spec = client.V1PodSpec(containers=[container], restart_policy='Never')
-    
+        env_list.append(client.V1EnvVar(name=env_name, value=env_value))
+    container = client.V1Container(
+        name=container_name, image=container_image, env=env_list)
+
+    if command:
+        container.command = command
+    if args:
+        container.args = args
+
+    template.template.spec = client.V1PodSpec(
+        containers=[container], restart_policy='Never')
+
     # And finaly we can create our V1JobSpec!
-    body.spec = client.V1JobSpec(ttl_seconds_after_finished=600, template=template.template)
-    
+    body.spec = client.V1JobSpec(
+        ttl_seconds_after_finished=600, template=template.template)
+
     return body
+
 
 def id_generator(name: str):
     ts = datetime.datetime.utcnow().isoformat().replace(':', '-').replace('.', '-')
     job_id = f'{name}-{ts}-job'.lower()
     return job_id
 
+
 def create_job(image: str, name: str, namespace='default', env_vars={}):
     # Create the job definition
     container_image = image
     name = id_generator(name)
     body = kube_create_job_object(name, container_image, env_vars=env_vars)
-    try: 
+    try:
         api_instance.create_namespaced_job(namespace, body, pretty=True)
         return name
-    except client.ApiException as e:
+    except client.rest.ApiException as e:
         print("Exception when calling BatchV1Api->create_namespaced_job: %s\n" % e)
         sys.exit(1)
+
 
 def get_pod_name(job_name: str, namespace: str) -> str:
     for _ in range(10):
         try:
-            pods = core_api.list_namespaced_pod(namespace=namespace, label_selector=f'job-name={job_name}').items
+            pods = core_api.list_namespaced_pod(
+                namespace=namespace, label_selector=f'job-name={job_name}').items
             pod = pods[0]
             return pod.metadata.name
         except Exception as e:
             print(e)
             time.sleep(2)
-    
+
     raise TimeoutError('Unable to find pod for job in 20 seconds')
-    
+
 
 async def main(image: str, name: str, namespace='default') -> str:
     job_id = create_job(image, name)
     pod_name = get_pod_name(job_id, namespace)
     await consume_logs(pod_name, 'default')
-    
 
 
-if __name__=='__main__':
+if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("image", type=str)
     parser.add_argument("name", type=str)
