@@ -1,5 +1,6 @@
 FROM google/cloud-sdk:latest
 
+EXPOSE 80
 WORKDIR /app
 
 RUN apt-get update
@@ -11,5 +12,4 @@ RUN pip3 install -r requirements.txt
 ADD . .
 
 ENTRYPOINT ["/app/entrypoint.sh"]
-
 CMD [ "gunicorn", "-w", "4", "-b", "0.0.0.0:80", "wsgi:app" ]
